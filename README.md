@@ -1,6 +1,23 @@
 # Qestra Orchestrator
 
-Qestra is a production-shaped foundation for a governed multi-agent orchestration platform: agents work on ticket-backed tasks, execution is logged, sensitive tool calls require approval, spend is tracked, and customer-owned LLM keys are encrypted per workspace.
+![CI](https://github.com/MihirGupta07/Qestra/actions/workflows/ci.yml/badge.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
+
+Qestra Orchestrator is an open-source foundation for building governed multi-agent systems.
+
+It treats agents less like chatbots and more like accountable workers: they receive ticket-backed tasks, run through controlled execution loops, request approval for sensitive actions, write durable traces, and spend against explicit budgets.
+
+## Why This Exists
+
+Most agent products overfocus on prompts and underfocus on orchestration. Qestra is built around the operational layer:
+
+- durable tasks and executions
+- approval gates
+- customer-owned LLM keys
+- audit logs
+- queues and workers
+- budget controls
+- dashboard visibility
 
 ## Stack
 
@@ -12,9 +29,24 @@ Redis + BullMQ workers
 OpenAI / Anthropic / mock LLM providers
 ```
 
-## Local Development
+## Features
+
+- Agent roster, task queue, approval queue, and execution dashboard
+- Fastify API with protected command routes
+- Customer BYOK provider settings with encrypted key storage
+- Mock, OpenAI, and Anthropic LLM provider abstraction
+- Sensitive tool-call approval gates
+- Execution, tool-call, and audit-chain records
+- Optional Redis/BullMQ worker path
+- MongoDB repository with in-memory local fallback
+- Dockerfiles and Docker Compose
+- GitHub Actions CI
+
+## Quick Start
 
 ```powershell
+git clone https://github.com/MihirGupta07/Qestra.git
+cd Qestra
 npm install
 npm run dev
 ```
@@ -37,9 +69,13 @@ Run API, dashboard, and worker:
 npm run dev:full
 ```
 
-## Production Environment
+## Configuration
 
-Copy `.env.example` to `.env` and set strong values:
+Copy `.env.example` to `.env`.
+
+For local development, most values can stay blank.
+
+For production, set:
 
 ```txt
 NODE_ENV=production
@@ -72,14 +108,6 @@ provider
 model
 ```
 
-## Governance
-
-- `operator` can create tasks and run heartbeats.
-- `admin` and `owner` can approve or reject sensitive actions.
-- Protected API routes require `Authorization: Bearer <API_AUTH_TOKEN>` when configured.
-- Every execution and approval appends an audit-chain record.
-- Shell, deploy, delete, and external-write style tool requests are approval gated.
-
 ## Verification
 
 ```powershell
@@ -108,6 +136,32 @@ App stack:
 docker compose --profile app up --build
 ```
 
-## Notes
+## Roadmap
 
-The current auth layer is intentionally minimal and suitable for an MVP/private beta. Before broad customer launch, replace role headers with real user auth and company membership resolution.
+- Real user auth and company membership
+- GitHub / Linear / Slack tools
+- Sandboxed shell execution
+- Agent memory and retrieval
+- Billing and workspace limits
+- Deployment templates
+- More test coverage around queues, budgets, and audit-chain integrity
+
+## Contributing
+
+Contributions are welcome. Start with [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+Please run:
+
+```powershell
+npm run check
+```
+
+before opening a pull request.
+
+## Security
+
+Please do not open public issues for vulnerabilities. See [SECURITY.md](./SECURITY.md).
+
+## License
+
+MIT. See [LICENSE](./LICENSE).

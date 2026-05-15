@@ -1,8 +1,28 @@
 {
   "name": "qestra-orchestrator",
-  "private": true,
+  "private": false,
   "version": "0.1.0",
   "description": "A governed multi-agent orchestration platform foundation.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MihirGupta07/Qestra.git"
+  },
+  "bugs": {
+    "url": "https://github.com/MihirGupta07/Qestra/issues"
+  },
+  "homepage": "https://github.com/MihirGupta07/Qestra#readme",
+  "keywords": [
+    "ai-agents",
+    "orchestration",
+    "workflow",
+    "governance",
+    "llm",
+    "bullmq",
+    "mongodb",
+    "nextjs",
+    "fastify"
+  ],
   "scripts": {
     "start": "npm run start:web",
     "dev:web": "next dev apps/web -p 4173",
