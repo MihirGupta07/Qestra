@@ -18,7 +18,7 @@ import {
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:4000";
+const API_BASE = "/api/qestra";
 
 type Agent = {
   _id: string;
@@ -127,7 +127,7 @@ export default function DashboardPage() {
 
   async function request(path: string, options?: RequestInit) {
     const response = await fetch(`${API_BASE}${path}`, {
-      headers: { "content-type": "application/json", "x-user-role": "owner" },
+      headers: { "content-type": "application/json" },
       cache: "no-store",
       ...options
     });

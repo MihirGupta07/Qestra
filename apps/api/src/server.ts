@@ -1,4 +1,6 @@
 import cors from "@fastify/cors";
+import helmet from "@fastify/helmet";
+import rateLimit from "@fastify/rate-limit";
 import Fastify from "fastify";
 import { z } from "zod";
 import { requireRole } from "./auth/rbac";
@@ -27,8 +29,20 @@ export async function buildServer() {
   const heartbeatQueue = createHeartbeatQueue(config.redisUrl);
   const app = Fastify({ logger: true });
 
+  await app.register(helmet);
+  await app.register(rateLimit, {
+    max: config.nodeEnv === "production" ? 300 : 1000,
+    timeWindow: "1 minute"
+  });
   await app.register(cors, {
-    origin: true
+    origin: (origin, callback) => {
+      if (!origin || config.corsOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error("Origin not allowed"), false);
+    }
   });
 
   app.get("/health", async () => ({
@@ -41,7 +55,7 @@ export async function buildServer() {
 
   app.get("/api/settings/provider", async () => repository.getSnapshot().then((snapshot) => snapshot.providerSettings));
 
-  app.put("/api/settings/provider", { preHandler: requireRole("admin") }, async (request, reply) => {
+  app.put("/api/settings/provider", { preHandler: requireRole("admin", config) }, async (request, reply) => {
     const parsed = providerSettingsSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: "Invalid provider settings payload", issues: parsed.error.issues });
@@ -51,7 +65,7 @@ export async function buildServer() {
     return settings;
   });
 
-  app.post("/api/settings/provider/test", { preHandler: requireRole("admin") }, async (request, reply) => {
+  app.post("/api/settings/provider/test", { preHandler: requireRole("admin", config) }, async (request, reply) => {
     const parsed = providerSettingsSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: "Invalid provider settings payload", issues: parsed.error.issues });
@@ -83,7 +97,7 @@ export async function buildServer() {
     };
   });
 
-  app.post("/api/tasks", { preHandler: requireRole("operator") }, async (request, reply) => {
+  app.post("/api/tasks", { preHandler: requireRole("operator", config) }, async (request, reply) => {
     const parsed = createTaskSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: "Invalid task payload", issues: parsed.error.issues });
@@ -93,7 +107,7 @@ export async function buildServer() {
     return reply.code(201).send(task);
   });
 
-  app.post("/api/heartbeat", { preHandler: requireRole("operator") }, async () => {
+  app.post("/api/heartbeat", { preHandler: requireRole("operator", config) }, async () => {
     if (heartbeatQueue.enabled) {
       await heartbeatQueue.enqueue();
       return repository.getSnapshot();
@@ -103,14 +117,14 @@ export async function buildServer() {
     return repository.runHeartbeat(llm);
   });
 
-  app.post("/api/approvals/:id/approve", { preHandler: requireRole("admin") }, async (request, reply) => {
+  app.post("/api/approvals/:id/approve", { preHandler: requireRole("admin", config) }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const approval = await repository.resolveApproval(id, "approved");
     if (!approval) return reply.code(404).send({ error: "Approval not found" });
     return repository.getSnapshot();
   });
 
-  app.post("/api/approvals/:id/reject", { preHandler: requireRole("admin") }, async (request, reply) => {
+  app.post("/api/approvals/:id/reject", { preHandler: requireRole("admin", config) }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const approval = await repository.resolveApproval(id, "rejected");
     if (!approval) return reply.code(404).send({ error: "Approval not found" });
