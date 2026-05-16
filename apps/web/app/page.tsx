@@ -111,7 +111,14 @@ export default function DashboardPage() {
     model: "mock",
     apiKey: ""
   });
+  const [taskForm, setTaskForm] = useState({
+    title: "Review governed tool execution",
+    goal: "Increase reliability and governance",
+    assigneeAgentId: "agent_eng",
+    priority: 5
+  });
   const [settingsMessage, setSettingsMessage] = useState("");
+  const [actionMessage, setActionMessage] = useState("");
 
   const totals = useMemo(() => {
     const agents = snapshot?.agents ?? [];
@@ -183,9 +190,12 @@ export default function DashboardPage() {
 
   async function command(action: () => Promise<unknown>) {
     setBusy(true);
+    setActionMessage("");
     try {
       await action();
       await load();
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : "Command failed.");
     } finally {
       setBusy(false);
     }
@@ -228,29 +238,25 @@ export default function DashboardPage() {
             <button
               className="secondary"
               disabled={busy || !apiOnline}
-              onClick={() => command(() => request("/api/heartbeat", { method: "POST", body: "{}" }))}
+              onClick={() =>
+                command(async () => {
+                  await request("/api/heartbeat", { method: "POST", body: "{}" });
+                  setActionMessage("Heartbeat submitted.");
+                })
+              }
             >
               <Play className="icon" /> Run Heartbeat
             </button>
             <button
+              className="secondary"
               disabled={busy || !apiOnline}
-              onClick={() =>
-                command(() =>
-                  request("/api/tasks", {
-                    method: "POST",
-                    body: JSON.stringify({
-                      title: "Review governed tool execution",
-                      goal: "Increase reliability and governance",
-                      assigneeAgentId: "agent_eng"
-                    })
-                  })
-                )
-              }
+              onClick={() => command(() => request("/api/demo/reset", { method: "POST", body: "{}" }))}
             >
-              <ClipboardList className="icon" /> Create Task
+              <X className="icon" /> Reset Demo
             </button>
           </div>
         </header>
+        {actionMessage ? <p className="notice">{actionMessage}</p> : null}
 
         <section className="metrics">
           <Metric icon={<Bot className="icon" />} label="Active agents" value={String(snapshot?.agents.length ?? 0)} />
@@ -260,6 +266,61 @@ export default function DashboardPage() {
         </section>
 
         <section className="workspace lower">
+          <Panel eyebrow="Work intake" title="Create Task">
+            <article className="item form-item">
+              <label>
+                Title
+                <input
+                  value={taskForm.title}
+                  onChange={(event) => setTaskForm((current) => ({ ...current, title: event.target.value }))}
+                />
+              </label>
+              <label>
+                Goal
+                <input
+                  value={taskForm.goal}
+                  onChange={(event) => setTaskForm((current) => ({ ...current, goal: event.target.value }))}
+                />
+              </label>
+              <label>
+                Assignee
+                <select
+                  value={taskForm.assigneeAgentId}
+                  onChange={(event) => setTaskForm((current) => ({ ...current, assigneeAgentId: event.target.value }))}
+                >
+                  {(snapshot?.agents ?? []).map((agent) => (
+                    <option key={agent._id} value={agent._id}>{agent.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Priority
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={taskForm.priority}
+                  onChange={(event) => setTaskForm((current) => ({ ...current, priority: Number(event.target.value) }))}
+                />
+              </label>
+              <button
+                disabled={busy || !apiOnline || taskForm.title.length < 3 || taskForm.goal.length < 3}
+                onClick={() =>
+                  command(async () => {
+                    await request("/api/tasks", {
+                      method: "POST",
+                      body: JSON.stringify(taskForm)
+                    });
+                    setActionMessage("Task created.");
+                  })
+                }
+              >
+                <ClipboardList className="icon" /> Create Task
+              </button>
+              <p>Use words like deploy, shell, approval, or delete to trigger the approval gate.</p>
+            </article>
+          </Panel>
+
           <Panel eyebrow="Workspace settings" title="Provider Keys">
             <article className="item form-item">
               <label>

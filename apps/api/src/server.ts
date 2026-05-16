@@ -14,7 +14,8 @@ import { decryptSecret } from "./security/secrets";
 const createTaskSchema = z.object({
   title: z.string().min(3),
   goal: z.string().min(3),
-  assigneeAgentId: z.string().optional()
+  assigneeAgentId: z.string().optional(),
+  priority: z.number().int().min(0).max(100).optional()
 });
 
 const providerSettingsSchema = z.object({
@@ -116,6 +117,8 @@ export async function buildServer() {
     const llm = await resolveCompanyLLMProvider(repository, config);
     return repository.runHeartbeat(llm);
   });
+
+  app.post("/api/demo/reset", { preHandler: requireRole("admin", config) }, async () => repository.resetDemoData());
 
   app.post("/api/approvals/:id/approve", { preHandler: requireRole("admin", config) }, async (request, reply) => {
     const { id } = request.params as { id: string };

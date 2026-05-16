@@ -42,7 +42,7 @@ export class InMemoryOrchestratorRepository implements OrchestratorRepository {
       goal: input.goal,
       assigneeAgentId: input.assigneeAgentId ?? fallbackAgent?._id ?? "agent_cto",
       status: "queued",
-      priority: 5,
+      priority: input.priority ?? 5,
       createdAt: nowIso()
     };
 
@@ -227,6 +227,20 @@ export class InMemoryOrchestratorRepository implements OrchestratorRepository {
     });
 
     return structuredClone(approval);
+  }
+
+  async resetDemoData(): Promise<DashboardSnapshot> {
+    const existingProviderSettings = this.providerSettings;
+    this.snapshot = seedSnapshot();
+    this.providerSettings = {
+      ...existingProviderSettings,
+      companyId: this.snapshot.company._id
+    };
+    this.appendAudit("user_local", "user", "demo.reset", this.snapshot.company._id, {
+      preservedProviderSettings: true
+    });
+
+    return this.getSnapshot();
   }
 
   async getProviderSettings(): Promise<ProviderSettingsDocument> {

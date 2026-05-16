@@ -71,4 +71,41 @@ describe("API hardening", () => {
     assert.ok(body.toolCalls.length >= 1);
     assert.ok(body.auditLogs.length >= 2);
   });
+
+  it("creates custom priority tasks and can reset demo state", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/tasks",
+      headers: {
+        authorization: `Bearer ${process.env.API_AUTH_TOKEN}`,
+        "content-type": "application/json",
+        "x-user-role": "operator"
+      },
+      payload: {
+        title: "Deploy customer demo",
+        goal: "Validate approval-gated workflow",
+        assigneeAgentId: "agent_eng",
+        priority: 42
+      }
+    });
+
+    assert.equal(created.statusCode, 201);
+    assert.equal(created.json().priority, 42);
+
+    const reset = await app.inject({
+      method: "POST",
+      url: "/api/demo/reset",
+      headers: {
+        authorization: `Bearer ${process.env.API_AUTH_TOKEN}`,
+        "content-type": "application/json",
+        "x-user-role": "admin"
+      },
+      payload: {}
+    });
+
+    assert.equal(reset.statusCode, 200);
+    const body = reset.json();
+    assert.equal(body.tasks.length, 2);
+    assert.equal(body.providerSettings.apiKeySet, true);
+  });
 });

@@ -76,7 +76,7 @@ export class MongoOrchestratorRepository implements OrchestratorRepository {
       goal: input.goal,
       assigneeAgentId: input.assigneeAgentId ?? fallbackAgent?._id ?? "agent_cto",
       status: "queued",
-      priority: 5,
+      priority: input.priority ?? 5,
       createdAt: nowIso()
     };
 
@@ -248,6 +248,36 @@ export class MongoOrchestratorRepository implements OrchestratorRepository {
     });
 
     return approval;
+  }
+
+  async resetDemoData(): Promise<DashboardSnapshot> {
+    const providerSettings = await this.getProviderSettings();
+    const seed = seedSnapshot();
+
+    await Promise.all([
+      this.companies.deleteMany({ _id: this.companyId }),
+      this.agents.deleteMany({ companyId: this.companyId }),
+      this.tasks.deleteMany({ companyId: this.companyId }),
+      this.approvals.deleteMany({ companyId: this.companyId }),
+      this.events.deleteMany({ companyId: this.companyId }),
+      this.executions.deleteMany({ companyId: this.companyId }),
+      this.toolCalls.deleteMany({ companyId: this.companyId }),
+      this.auditLogs.deleteMany({ companyId: this.companyId })
+    ]);
+
+    await Promise.all([
+      this.companies.insertOne(seed.company),
+      this.agents.insertMany(seed.agents),
+      this.tasks.insertMany(seed.tasks),
+      this.events.insertMany(seed.events),
+      this.auditLogs.insertMany(seed.auditLogs),
+      this.providerSettings.replaceOne({ _id: providerSettings._id }, providerSettings, { upsert: true })
+    ]);
+    await this.appendAudit("user_local", "user", "demo.reset", this.companyId, {
+      preservedProviderSettings: true
+    });
+
+    return this.getSnapshot();
   }
 
   async getProviderSettings(): Promise<ProviderSettingsDocument> {

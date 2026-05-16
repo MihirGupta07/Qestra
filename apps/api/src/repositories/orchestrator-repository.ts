@@ -16,6 +16,7 @@ export interface CreateTaskInput {
   title: string;
   goal: string;
   assigneeAgentId?: string;
+  priority?: number;
 }
 
 export interface UpsertProviderSettingsInput {
@@ -29,6 +30,7 @@ export interface OrchestratorRepository {
   createTask(input: CreateTaskInput): Promise<TaskDocument>;
   runHeartbeat(llm?: LLMProvider): Promise<DashboardSnapshot>;
   resolveApproval(id: string, status: "approved" | "rejected"): Promise<ApprovalDocument | undefined>;
+  resetDemoData(): Promise<DashboardSnapshot>;
   getProviderSettings(): Promise<ProviderSettingsDocument>;
   updateProviderSettings(input: UpsertProviderSettingsInput, encryptionSecret: string): Promise<ProviderSettingsPublic>;
 }

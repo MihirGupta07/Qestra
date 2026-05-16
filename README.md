@@ -57,6 +57,20 @@ Open:
 http://127.0.0.1:4173
 ```
 
+## MVP Walkthrough
+
+The default local setup works without MongoDB, Redis, or provider keys.
+
+1. Open the dashboard.
+2. Use **Create Task** to add a task.
+3. Use words like `deploy`, `shell`, `delete`, or `approval` in the title or goal to trigger a human approval gate.
+4. Click **Run Heartbeat**.
+5. Review the task, execution, tool call, approval, and audit-chain panels.
+6. Approve or reject pending approvals.
+7. Click **Reset Demo** to restore the seeded state while preserving provider settings.
+
+For persistence across restarts, set `MONGODB_URI`. For queued worker execution, set `REDIS_URL` and run `npm run dev:full`.
+
 Run MongoDB and Redis locally:
 
 ```powershell
