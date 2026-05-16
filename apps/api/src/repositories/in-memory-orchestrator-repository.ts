@@ -1,13 +1,18 @@
+import { InMemoryNotesStore, type NotesStore } from "../../../../packages/tools/src/notes-tool";
 import type {
-  AuditLogDocument,
+  AgentDocument,
   ApprovalDocument,
+  AuditLogDocument,
   DashboardSnapshot,
   ExecutionDocument,
   ExecutionEventDocument,
-  TaskDocument
+  ProviderSettingsDocument,
+  ProviderSettingsPublic,
+  TaskDocument,
+  ToolCallDocument
 } from "../domain";
 import {
-  type CreateTaskInput,
+  type AppendEventInput,
   createAuditLog,
   createId,
   defaultProviderSettings,
@@ -15,21 +20,22 @@ import {
   type OrchestratorRepository,
   publicProviderSettings,
   seedSnapshot,
+  type CreateTaskInput,
   type UpsertProviderSettingsInput
 } from "./orchestrator-repository";
-import type { LLMProvider } from "../../../../packages/llm/src/provider";
-import type { ProviderSettingsDocument, ProviderSettingsPublic } from "../domain";
 import { encryptSecret, last4 } from "../security/secrets";
 
 export class InMemoryOrchestratorRepository implements OrchestratorRepository {
-  private snapshot = seedSnapshot();
+  private snapshot = makeFreshSnapshot();
   private providerSettings = defaultProviderSettings(this.snapshot.company._id);
+  private notes = new InMemoryNotesStore();
 
   async getSnapshot(): Promise<DashboardSnapshot> {
-    return structuredClone({
-      ...this.snapshot,
-      providerSettings: publicProviderSettings(this.providerSettings)
-    });
+    return {
+      ...structuredClone(this.snapshot),
+      providerSettings: publicProviderSettings(this.providerSettings),
+      notes: await this.notes.list()
+    };
   }
 
   async createTask(input: CreateTaskInput): Promise<TaskDocument> {
@@ -40,206 +46,133 @@ export class InMemoryOrchestratorRepository implements OrchestratorRepository {
       ticketId: createId("ticket"),
       title: input.title,
       goal: input.goal,
-      assigneeAgentId: input.assigneeAgentId ?? fallbackAgent?._id ?? "agent_cto",
+      assigneeAgentId: input.assigneeAgentId ?? fallbackAgent?._id ?? this.snapshot.agents[0]._id,
       status: "queued",
       priority: input.priority ?? 5,
       createdAt: nowIso()
     };
 
     this.snapshot.tasks.push(task);
-    this.appendEvent({
+    await this.appendEvent({
       title: "Task created",
-      detail: `${task.title} entered the ticket-backed queue.`,
+      detail: task.title,
       taskId: task._id
     });
-
     return structuredClone(task);
   }
 
-  async runHeartbeat(llm?: LLMProvider): Promise<DashboardSnapshot> {
-    const task = this.snapshot.tasks
-      .filter((candidate) => candidate.status === "queued")
+  async claimNextQueuedTask(): Promise<TaskDocument | undefined> {
+    const candidate = [...this.snapshot.tasks]
+      .filter((task) => task.status === "queued")
       .sort((left, right) => right.priority - left.priority || left.createdAt.localeCompare(right.createdAt))[0];
-
-    if (!task) {
-      this.appendEvent({
-        title: "Heartbeat completed",
-        detail: "No queued tasks were available for assignment."
-      });
-      return this.getSnapshot();
-    }
-
-    const agent = this.snapshot.agents.find((candidate) => candidate._id === task.assigneeAgentId);
-    if (!agent || agent.status === "paused") {
-      task.status = "blocked";
-      this.appendEvent({
-        title: "Task blocked",
-        detail: `${task.title} has no available agent.`,
-        taskId: task._id
-      });
-      return this.getSnapshot();
-    }
-
-    if (agent.budgetUsedCents >= agent.budgetLimitCents) {
-      agent.status = "paused";
-      task.status = "blocked";
-      this.appendEvent({
-        title: "Budget guard paused agent",
-        detail: `${agent.name} reached its configured execution budget.`,
-        taskId: task._id,
-        agentId: agent._id
-      });
-      return this.getSnapshot();
-    }
-
-    task.status = "running";
-    agent.status = "running";
-    const executionId = createId("execution");
-    const llmResult = await llm?.generate({
-      system: `You are ${agent.name}. Plan one governed next action and respect approval gates.`,
-      messages: [{ role: "user", content: `${task.title}\nGoal: ${task.goal}` }],
-      maxTokens: 500
-    });
-    const costCents = llmResult?.costCents ?? 125 + Math.floor(Math.random() * 350);
-    agent.budgetUsedCents += costCents;
-    const execution: ExecutionDocument = {
-      _id: executionId,
-      companyId: task.companyId,
-      taskId: task._id,
-      agentId: agent._id,
-      status: "running",
-      provider: llm?.name ?? "mock",
-      inputSummary: task.title,
-      outputSummary: llmResult?.content ?? `Planned governed action for ${task.title}.`,
-      costCents,
-      createdAt: nowIso()
-    };
-    this.snapshot.executions.push(execution);
-
-    this.appendEvent({
-      title: "Agent woke",
-      detail: `${agent.name} locked ${task.title} for execution.`,
-      taskId: task._id,
-      agentId: agent._id
-    });
-
-    if (requiresApproval(task)) {
-      task.status = "blocked";
-      execution.status = "waiting_for_approval";
-      const approval: ApprovalDocument = {
-        _id: createId("approval"),
-        companyId: task.companyId,
-        taskId: task._id,
-        executionId,
-        requestedByAgentId: agent._id,
-        title: "Sensitive tool call requested",
-        reason: `${agent.name} wants permission to continue a protected action for ${task.title}.`,
-        status: "pending",
-        createdAt: nowIso()
-      };
-      this.snapshot.toolCalls.push({
-        _id: createId("toolcall"),
-        companyId: task.companyId,
-        executionId,
-        taskId: task._id,
-        agentId: agent._id,
-        toolName: inferToolName(task),
-        requestedScope: inferScope(task),
-        sensitive: true,
-        status: "approval_required",
-        createdAt: nowIso()
-      });
-      this.snapshot.approvals.push(approval);
-      this.appendEvent({
-        title: "Approval required",
-        detail: "Execution paused until a human resolves the governance request.",
-        taskId: task._id,
-        agentId: agent._id,
-        costCents
-      });
-    } else {
-      task.status = "done";
-      execution.status = "completed";
-      this.snapshot.toolCalls.push({
-        _id: createId("toolcall"),
-        companyId: task.companyId,
-        executionId,
-        taskId: task._id,
-        agentId: agent._id,
-        toolName: "audit_log.write",
-        requestedScope: "audit:write",
-        sensitive: false,
-        status: "executed",
-        createdAt: nowIso()
-      });
-      this.appendEvent({
-        title: "Execution completed",
-        detail: `${agent.name} completed the task and wrote an audit event.`,
-        taskId: task._id,
-        agentId: agent._id,
-        costCents
-      });
-    }
-
-    agent.status = "ready";
-    this.appendAudit(agent._id, "agent", "execution.run", executionId, {
-      taskId: task._id,
-      status: execution.status,
-      provider: execution.provider
-    });
-    return this.getSnapshot();
+    if (!candidate) return undefined;
+    candidate.status = "running";
+    return structuredClone(candidate);
   }
 
-  async resolveApproval(id: string, status: "approved" | "rejected"): Promise<ApprovalDocument | undefined> {
+  async updateTaskStatus(id: string, status: TaskDocument["status"]): Promise<void> {
+    const task = this.snapshot.tasks.find((candidate) => candidate._id === id);
+    if (task) task.status = status;
+  }
+
+  async getAgent(id: string): Promise<AgentDocument | undefined> {
+    const agent = this.snapshot.agents.find((candidate) => candidate._id === id);
+    return agent ? structuredClone(agent) : undefined;
+  }
+
+  async setAgentStatus(id: string, status: AgentDocument["status"]): Promise<void> {
+    const agent = this.snapshot.agents.find((candidate) => candidate._id === id);
+    if (agent) agent.status = status;
+  }
+
+  async incrementAgentBudget(id: string, costCents: number): Promise<void> {
+    const agent = this.snapshot.agents.find((candidate) => candidate._id === id);
+    if (!agent) return;
+    agent.budgetUsedCents += costCents;
+    if (agent.budgetUsedCents >= agent.budgetLimitCents) {
+      agent.status = "paused";
+    }
+  }
+
+  async createExecution(execution: ExecutionDocument): Promise<void> {
+    this.snapshot.executions.unshift(structuredClone(execution));
+  }
+
+  async getExecution(id: string): Promise<ExecutionDocument | undefined> {
+    const execution = this.snapshot.executions.find((candidate) => candidate._id === id);
+    return execution ? structuredClone(execution) : undefined;
+  }
+
+  async updateExecution(id: string, patch: Partial<ExecutionDocument>): Promise<void> {
+    const execution = this.snapshot.executions.find((candidate) => candidate._id === id);
+    if (!execution) return;
+    Object.assign(execution, patch);
+  }
+
+  async addToolCall(toolCall: ToolCallDocument): Promise<void> {
+    this.snapshot.toolCalls.unshift(structuredClone(toolCall));
+  }
+
+  async updateToolCall(id: string, patch: Partial<ToolCallDocument>): Promise<void> {
+    const toolCall = this.snapshot.toolCalls.find((candidate) => candidate._id === id);
+    if (!toolCall) return;
+    Object.assign(toolCall, patch);
+  }
+
+  async createApproval(approval: ApprovalDocument): Promise<void> {
+    this.snapshot.approvals.unshift(structuredClone(approval));
+  }
+
+  async getApproval(id: string): Promise<ApprovalDocument | undefined> {
     const approval = this.snapshot.approvals.find((candidate) => candidate._id === id);
-    if (!approval) return undefined;
+    return approval ? structuredClone(approval) : undefined;
+  }
 
-    approval.status = status;
-    const task = this.snapshot.tasks.find((candidate) => candidate._id === approval.taskId);
+  async setApprovalStatus(id: string, status: ApprovalDocument["status"]): Promise<void> {
+    const approval = this.snapshot.approvals.find((candidate) => candidate._id === id);
+    if (approval) approval.status = status;
+  }
 
-    if (task) {
-      task.status = status === "approved" ? "done" : "queued";
-    }
+  async appendEvent(input: AppendEventInput): Promise<void> {
+    const event: ExecutionEventDocument = {
+      _id: createId("event"),
+      companyId: this.snapshot.company._id,
+      taskId: input.taskId,
+      agentId: input.agentId,
+      executionId: input.executionId,
+      title: input.title,
+      detail: input.detail,
+      costCents: input.costCents ?? 0,
+      createdAt: nowIso()
+    };
+    this.snapshot.events.unshift(event);
+    // Keep the tail bounded so the snapshot doesn't grow forever in long-running dev sessions.
+    if (this.snapshot.events.length > 200) this.snapshot.events.length = 200;
+  }
 
-    const execution = this.snapshot.executions.find((candidate) => candidate._id === approval.executionId);
-    if (execution) {
-      execution.status = status === "approved" ? "completed" : "failed";
-    }
-
-    const toolCall = this.snapshot.toolCalls.find((candidate) => candidate.executionId === approval.executionId);
-    if (toolCall) {
-      toolCall.status = status === "approved" ? "approved" : "rejected";
-    }
-
-    this.appendEvent({
-      title: status === "approved" ? "Approval granted" : "Approval rejected",
-      detail:
-        status === "approved"
-          ? "The blocked execution resumed and completed under human authorization."
-          : "The action was denied and the task returned to the queue for replanning.",
-      taskId: task?._id,
-      agentId: approval.requestedByAgentId
-    });
-
-    this.appendAudit("user_local", "user", `approval.${status}`, approval._id, {
-      taskId: approval.taskId,
-      executionId: approval.executionId
-    });
-
-    return structuredClone(approval);
+  async appendAudit(
+    actorId: string,
+    actorType: AuditLogDocument["actorType"],
+    action: string,
+    targetId: string,
+    metadata: Record<string, unknown>
+  ): Promise<void> {
+    const previous = this.snapshot.auditLogs[0]?.hash;
+    const log = createAuditLog(this.snapshot.company._id, actorId, actorType, action, targetId, previous, metadata);
+    this.snapshot.auditLogs.unshift(log);
+    if (this.snapshot.auditLogs.length > 200) this.snapshot.auditLogs.length = 200;
   }
 
   async resetDemoData(): Promise<DashboardSnapshot> {
-    const existingProviderSettings = this.providerSettings;
-    this.snapshot = seedSnapshot();
-    this.providerSettings = {
-      ...existingProviderSettings,
-      companyId: this.snapshot.company._id
-    };
-    this.appendAudit("user_local", "user", "demo.reset", this.snapshot.company._id, {
+    const preserved = this.providerSettings;
+    this.snapshot = makeFreshSnapshot();
+    this.providerSettings = { ...preserved, companyId: this.snapshot.company._id };
+    // Clear in place so the toolRouter (which captured a reference at startup)
+    // keeps writing to the same store.
+    this.notes.clear();
+    await this.appendAudit("user_local", "user", "demo.reset", this.snapshot.company._id, {
       preservedProviderSettings: true
     });
-
     return this.getSnapshot();
   }
 
@@ -247,76 +180,37 @@ export class InMemoryOrchestratorRepository implements OrchestratorRepository {
     return structuredClone(this.providerSettings);
   }
 
-  async updateProviderSettings(input: UpsertProviderSettingsInput, encryptionSecret: string): Promise<ProviderSettingsPublic> {
+  async updateProviderSettings(
+    input: UpsertProviderSettingsInput,
+    encryptionSecret: string
+  ): Promise<ProviderSettingsPublic> {
+    const encryptedApiKey = input.apiKey
+      ? encryptSecret(input.apiKey, encryptionSecret)
+      : this.providerSettings.encryptedApiKey;
     this.providerSettings = {
       ...this.providerSettings,
       provider: input.provider,
       model: input.model,
-      encryptedApiKey: input.apiKey ? encryptSecret(input.apiKey, encryptionSecret) : this.providerSettings.encryptedApiKey,
+      baseUrl: input.baseUrl ?? this.providerSettings.baseUrl,
+      encryptedApiKey,
       apiKeyLast4: input.apiKey ? last4(input.apiKey) : this.providerSettings.apiKeyLast4,
-      apiKeySet: Boolean(input.apiKey || this.providerSettings.encryptedApiKey),
+      apiKeySet: Boolean(encryptedApiKey),
       updatedAt: nowIso()
     };
-
-    this.appendAudit("user_local", "user", "provider_settings.update", this.providerSettings._id, {
+    await this.appendAudit("user_local", "user", "provider_settings.update", this.providerSettings._id, {
       provider: input.provider,
       model: input.model,
+      baseUrl: this.providerSettings.baseUrl,
       apiKeySet: this.providerSettings.apiKeySet
     });
-
     return publicProviderSettings(this.providerSettings);
   }
 
-  private appendEvent(input: {
-    title: string;
-    detail: string;
-    taskId?: string;
-    agentId?: string;
-    costCents?: number;
-  }) {
-    const event: ExecutionEventDocument = {
-      _id: createId("event"),
-      companyId: this.snapshot.company._id,
-      taskId: input.taskId,
-      agentId: input.agentId,
-      title: input.title,
-      detail: input.detail,
-      costCents: input.costCents ?? 0,
-      createdAt: nowIso()
-    };
-
-    this.snapshot.events.push(event);
-  }
-
-  private appendAudit(
-    actorId: string,
-    actorType: AuditLogDocument["actorType"],
-    action: string,
-    targetId: string,
-    metadata: Record<string, unknown>
-  ) {
-    const previousHash = this.snapshot.auditLogs.at(-1)?.hash;
-    this.snapshot.auditLogs.push(createAuditLog(this.snapshot.company._id, actorId, actorType, action, targetId, previousHash, metadata));
+  notesStore(): NotesStore {
+    return this.notes;
   }
 }
 
-function requiresApproval(task: TaskDocument) {
-  const text = `${task.title} ${task.goal}`.toLowerCase();
-  return text.includes("approval") || text.includes("deploy") || text.includes("shell") || text.includes("delete");
-}
-
-function inferToolName(task: TaskDocument) {
-  const text = `${task.title} ${task.goal}`.toLowerCase();
-  if (text.includes("shell")) return "shell.exec";
-  if (text.includes("deploy")) return "deployment.promote";
-  if (text.includes("delete")) return "data.delete";
-  return "approval.request";
-}
-
-function inferScope(task: TaskDocument) {
-  const toolName = inferToolName(task);
-  if (toolName === "shell.exec") return "shell:scoped";
-  if (toolName === "deployment.promote") return "deploy:write";
-  if (toolName === "data.delete") return "data:delete";
-  return "approval:write";
+function makeFreshSnapshot(): Omit<DashboardSnapshot, "notes"> {
+  return seedSnapshot();
 }

@@ -1,44 +1,43 @@
 import type { ApiConfig } from "../config";
 import type { LLMProviderName } from "../domain";
-import { AnthropicProvider, MockLLMProvider, OpenAIProvider, type LLMProvider } from "../../../../packages/llm/src/provider";
+import {
+  AnthropicProvider,
+  MockLLMProvider,
+  OpenAICompatibleProvider,
+  type LLMProvider
+} from "../../../../packages/llm/src/provider";
 
-export function createLLMProvider(config: ApiConfig): LLMProvider {
-  if (config.llmProvider === "openai") {
-    if (!config.openaiApiKey) {
-      throw new Error("OPENAI_API_KEY is required when LLM_PROVIDER=openai.");
-    }
-
-    return new OpenAIProvider(config.openaiApiKey);
-  }
-
-  if (config.llmProvider === "anthropic") {
-    if (!config.anthropicApiKey) {
-      throw new Error("ANTHROPIC_API_KEY is required when LLM_PROVIDER=anthropic.");
-    }
-
-    return new AnthropicProvider(config.anthropicApiKey);
-  }
-
-  return new MockLLMProvider();
-}
-
-export function createLLMProviderFromKey(input: {
+export interface CreateProviderInput {
   provider: LLMProviderName;
   model: string;
   apiKey?: string;
+  baseUrl?: string;
   fallback: ApiConfig;
-}): LLMProvider {
-  if (input.provider === "openai") {
-    const apiKey = input.apiKey ?? input.fallback.openaiApiKey;
-    if (!apiKey) throw new Error("OpenAI API key is not configured for this company.");
-    return new OpenAIProvider(apiKey, input.model);
+}
+
+export function createLLMProviderFromKey(input: CreateProviderInput): LLMProvider {
+  if (input.provider === "mock") {
+    return new MockLLMProvider();
+  }
+
+  const apiKey = input.apiKey ?? input.fallback.fallbackApiKey;
+  if (!apiKey) {
+    throw new Error(`${input.provider} requires an API key (set it in Provider Keys or LLM_API_KEY).`);
   }
 
   if (input.provider === "anthropic") {
-    const apiKey = input.apiKey ?? input.fallback.anthropicApiKey;
-    if (!apiKey) throw new Error("Anthropic API key is not configured for this company.");
-    return new AnthropicProvider(apiKey, input.model);
+    return new AnthropicProvider({
+      apiKey,
+      model: input.model,
+      baseUrl: input.baseUrl ?? input.fallback.fallbackBaseUrl
+    });
   }
 
-  return new MockLLMProvider();
+  // openai-compatible — also serves OpenAI itself, Groq, Nvidia NIM, Together,
+  // OpenRouter, Ollama, etc. baseUrl selects which.
+  return new OpenAICompatibleProvider({
+    apiKey,
+    model: input.model,
+    baseUrl: input.baseUrl ?? input.fallback.fallbackBaseUrl
+  });
 }

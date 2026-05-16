@@ -10,6 +10,7 @@ export async function resolveCompanyLLMProvider(repository: OrchestratorReposito
   return createLLMProviderFromKey({
     provider: settings.provider,
     model: settings.model,
+    baseUrl: settings.baseUrl,
     apiKey,
     fallback: config
   });

@@ -1,16 +1,23 @@
+/**
+ * The repository hides storage. Two implementations exist (in-memory + Mongo);
+ * the orchestrator/heartbeat module uses only this interface so the same loop
+ * runs against either backend.
+ */
+import { createHash } from "node:crypto";
+import type { NotesStore } from "../../../../packages/tools/src/notes-tool";
 import type {
   AgentDocument,
-  AuditLogDocument,
   ApprovalDocument,
+  AuditLogDocument,
   DashboardSnapshot,
   ExecutionDocument,
   ExecutionEventDocument,
   LLMProviderName,
   ProviderSettingsDocument,
   ProviderSettingsPublic,
-  TaskDocument
+  TaskDocument,
+  ToolCallDocument
 } from "../domain";
-import type { LLMProvider } from "../../../../packages/llm/src/provider";
 
 export interface CreateTaskInput {
   title: string;
@@ -23,21 +30,69 @@ export interface UpsertProviderSettingsInput {
   provider: LLMProviderName;
   model: string;
   apiKey?: string;
+  baseUrl?: string;
+}
+
+export interface AppendEventInput {
+  title: string;
+  detail: string;
+  taskId?: string;
+  agentId?: string;
+  executionId?: string;
+  costCents?: number;
 }
 
 export interface OrchestratorRepository {
+  // ---- snapshot for the dashboard ----
   getSnapshot(): Promise<DashboardSnapshot>;
+
+  // ---- tasks ----
   createTask(input: CreateTaskInput): Promise<TaskDocument>;
-  runHeartbeat(llm?: LLMProvider): Promise<DashboardSnapshot>;
-  resolveApproval(id: string, status: "approved" | "rejected"): Promise<ApprovalDocument | undefined>;
+  /** Atomically claim the next queued task (highest priority, oldest). */
+  claimNextQueuedTask(): Promise<TaskDocument | undefined>;
+  updateTaskStatus(id: string, status: TaskDocument["status"]): Promise<void>;
+
+  // ---- agents ----
+  getAgent(id: string): Promise<AgentDocument | undefined>;
+  setAgentStatus(id: string, status: AgentDocument["status"]): Promise<void>;
+  incrementAgentBudget(id: string, costCents: number): Promise<void>;
+
+  // ---- executions ----
+  createExecution(execution: ExecutionDocument): Promise<void>;
+  getExecution(id: string): Promise<ExecutionDocument | undefined>;
+  updateExecution(id: string, patch: Partial<ExecutionDocument>): Promise<void>;
+
+  // ---- tool calls ----
+  addToolCall(toolCall: ToolCallDocument): Promise<void>;
+  updateToolCall(id: string, patch: Partial<ToolCallDocument>): Promise<void>;
+
+  // ---- approvals ----
+  createApproval(approval: ApprovalDocument): Promise<void>;
+  getApproval(id: string): Promise<ApprovalDocument | undefined>;
+  setApprovalStatus(id: string, status: ApprovalDocument["status"]): Promise<void>;
+
+  // ---- events + audit ----
+  appendEvent(event: AppendEventInput): Promise<void>;
+  appendAudit(
+    actorId: string,
+    actorType: AuditLogDocument["actorType"],
+    action: string,
+    targetId: string,
+    metadata: Record<string, unknown>
+  ): Promise<void>;
+
+  // ---- demo + settings ----
   resetDemoData(): Promise<DashboardSnapshot>;
   getProviderSettings(): Promise<ProviderSettingsDocument>;
   updateProviderSettings(input: UpsertProviderSettingsInput, encryptionSecret: string): Promise<ProviderSettingsPublic>;
+
+  // ---- notes ----
+  notesStore(): NotesStore;
 }
 
-export function centsToDollars(cents: number) {
-  return cents / 100;
-}
+// ---------------------------------------------------------------------------
+// Helpers shared by both implementations.
+// ---------------------------------------------------------------------------
 
 export function createId(prefix: string) {
   return `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
@@ -45,101 +100,6 @@ export function createId(prefix: string) {
 
 export function nowIso() {
   return new Date().toISOString();
-}
-
-export function seedSnapshot(): DashboardSnapshot {
-  const companyId = "company_acme";
-
-  return {
-    company: {
-      _id: companyId,
-      name: "Acme Robotics",
-      monthlyBudgetCents: 25000
-    },
-    agents: [
-      {
-        _id: "agent_ceo",
-        companyId,
-        name: "CEO Agent",
-        role: "Goal decomposition",
-        status: "ready",
-        model: "mock",
-        budgetLimitCents: 10000,
-        budgetUsedCents: 720,
-        toolScopes: ["ticket:write", "audit:write"]
-      },
-      {
-        _id: "agent_cto",
-        companyId,
-        name: "CTO Agent",
-        role: "Engineering planning",
-        status: "ready",
-        model: "mock",
-        budgetLimitCents: 8000,
-        budgetUsedCents: 510,
-        toolScopes: ["ticket:write", "audit:write"]
-      },
-      {
-        _id: "agent_eng",
-        companyId,
-        name: "Engineer Agent",
-        role: "Implementation",
-        status: "ready",
-        model: "mock",
-        budgetLimitCents: 9000,
-        budgetUsedCents: 612,
-        toolScopes: ["ticket:write", "audit:write", "shell:scoped"]
-      }
-    ],
-    tasks: [
-      {
-        _id: "task_001",
-        companyId,
-        ticketId: "ticket_001",
-        title: "Design first execution lifecycle",
-        goal: "Prove governed agent work loop",
-        assigneeAgentId: "agent_cto",
-        status: "queued",
-        priority: 10,
-        createdAt: nowIso()
-      },
-      {
-        _id: "task_002",
-        companyId,
-        ticketId: "ticket_002",
-        title: "Draft approval gate for deploy actions",
-        goal: "Prevent sensitive autonomous changes",
-        assigneeAgentId: "agent_eng",
-        status: "queued",
-        priority: 9,
-        createdAt: nowIso()
-      }
-    ],
-    approvals: [],
-    executions: [],
-    toolCalls: [],
-    events: [
-      {
-        _id: "event_init",
-        companyId,
-        title: "System initialized",
-        detail: "Company, agents, queue, budget, and audit stream are loaded from the API.",
-        costCents: 0,
-        createdAt: nowIso()
-      }
-    ],
-    auditLogs: [
-      createAuditLog(companyId, "system", "system", "system.seed", companyId, undefined, {
-        message: "Seeded initial company, agents, tasks, and audit chain."
-      })
-    ],
-    providerSettings: {
-      provider: "mock",
-      model: "mock",
-      apiKeySet: false,
-      updatedAt: nowIso()
-    }
-  };
 }
 
 export function defaultProviderSettings(companyId: string): ProviderSettingsDocument {
@@ -157,9 +117,83 @@ export function publicProviderSettings(settings: ProviderSettingsDocument): Prov
   return {
     provider: settings.provider,
     model: settings.model,
+    baseUrl: settings.baseUrl,
     apiKeySet: settings.apiKeySet,
     apiKeyLast4: settings.apiKeyLast4,
     updatedAt: settings.updatedAt
+  };
+}
+
+export function seedSnapshot(): Omit<DashboardSnapshot, "notes"> {
+  const companyId = "company_local";
+
+  return {
+    company: {
+      _id: companyId,
+      name: "My Workspace",
+      monthlyBudgetCents: 25000
+    },
+    agents: [
+      {
+        _id: "agent_researcher",
+        companyId,
+        name: "Researcher",
+        role: "Reads URLs and the workspace; answers questions",
+        status: "ready",
+        model: "auto",
+        budgetLimitCents: 50000,
+        budgetUsedCents: 0,
+        toolScopes: ["http:fetch", "file:read", "file:write", "notes:read", "notes:write"]
+      },
+      {
+        _id: "agent_engineer",
+        companyId,
+        name: "Engineer",
+        role: "Edits files and runs allowlisted shell commands",
+        status: "ready",
+        model: "auto",
+        budgetLimitCents: 50000,
+        budgetUsedCents: 0,
+        toolScopes: ["http:fetch", "file:read", "file:write", "notes:read", "notes:write", "shell:exec"]
+      }
+    ],
+    tasks: [
+      {
+        _id: "task_seed_1",
+        companyId,
+        ticketId: "ticket_seed_1",
+        title: "Save a starter note",
+        goal: "Use the notes tool to save a key called 'welcome' with any value.",
+        assigneeAgentId: "agent_researcher",
+        status: "queued",
+        priority: 10,
+        createdAt: nowIso()
+      }
+    ],
+    approvals: [],
+    executions: [],
+    toolCalls: [],
+    events: [
+      {
+        _id: "event_init",
+        companyId,
+        title: "System initialized",
+        detail: "Agents, tools, and the audit chain are loaded.",
+        costCents: 0,
+        createdAt: nowIso()
+      }
+    ],
+    auditLogs: [
+      createAuditLog(companyId, "system", "system", "system.seed", companyId, undefined, {
+        message: "Seeded initial workspace, agents, and audit chain."
+      })
+    ],
+    providerSettings: {
+      provider: "mock",
+      model: "mock",
+      apiKeySet: false,
+      updatedAt: nowIso()
+    }
   };
 }
 
@@ -191,12 +225,5 @@ export function createAuditLog(
 
 export function makeAuditHash(input: Record<string, unknown>) {
   const json = JSON.stringify(input);
-  let hash = 0;
-
-  for (let index = 0; index < json.length; index += 1) {
-    hash = (hash << 5) - hash + json.charCodeAt(index);
-    hash |= 0;
-  }
-
-  return `audit_${Math.abs(hash).toString(16).padStart(8, "0")}`;
+  return `audit_${createHash("sha256").update(json).digest("hex").slice(0, 16)}`;
 }
