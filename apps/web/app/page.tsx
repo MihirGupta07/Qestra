@@ -43,7 +43,7 @@ function LpNav() {
           <a href="#how-it-works" className="lp-nav-link">How it works</a>
           <a href="#pricing" className="lp-nav-link">Pricing</a>
           <a href="https://github.com/MihirGupta07/Qestra" className="lp-nav-link" target="_blank" rel="noopener noreferrer">GitHub</a>
-          <Link href="/dashboard" className="lp-btn lp-btn-sm">Dashboard →</Link>
+          <Link href="/dashboard" className="lp-btn lp-btn-sm">Sample Dashboard →</Link>
         </div>
       </div>
     </nav>
