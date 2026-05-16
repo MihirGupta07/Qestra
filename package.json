@@ -34,6 +34,7 @@
     "start:api": "tsx apps/api/src/index.ts",
     "start:worker": "tsx apps/workers/src/bullmq-worker.ts",
     "build:web": "next build apps/web",
+    "vercel-build": "next build apps/web",
     "test": "tsx --test tests/**/*.test.ts",
     "check": "npm run typecheck && npm test && npm run build:web",
     "typecheck": "tsc --noEmit"
